@@ -1,0 +1,22 @@
+# Secrets
+.env*
+!.env.example
+
+# Data, models and run logs (rebuilt by the scripts; never committed)
+data/
+checkpoints/
+artifacts/
+wandb/
+mlruns/
+mlflow.db
+mlartifacts/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+.DS_Store
