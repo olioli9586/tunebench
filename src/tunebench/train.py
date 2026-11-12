@@ -89,8 +89,8 @@ def build(recipe: Recipe, names: list[str]):
     tokenizer = AutoTokenizer.from_pretrained(recipe.checkpoint, revision=recipe.revision)
     options: dict[str, object] = {}
     if recipe.lora:
-        # Frozen base weights in bfloat16 halve memory; the adapters train in float32.
-        options["dtype"] = torch.bfloat16
+        # Frozen base weights in 16 bits halve memory; the adapters train in float32.
+        options["dtype"] = {"bf16": torch.bfloat16, "fp16": torch.float16}.get(precision(), torch.float32)
     model = AutoModelForSequenceClassification.from_pretrained(
         recipe.checkpoint,
         revision=recipe.revision,
@@ -117,6 +117,18 @@ def build(recipe: Recipe, names: list[str]):
     return tokenizer, model
 
 
+def precision() -> str:
+    """Mixed precision for this device: bfloat16 on Apple GPUs and recent NVIDIA ones,
+    float16 on older NVIDIA cards without bfloat16 (Kaggle's and Colab's T4), none on a CPU."""
+    import torch
+
+    if torch.backends.mps.is_available():
+        return "bf16"
+    if torch.cuda.is_available():
+        return "bf16" if torch.cuda.is_bf16_supported() else "fp16"
+    return "fp32"
+
+
 def parameter_counts(model) -> dict[str, int]:
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -125,7 +137,6 @@ def parameter_counts(model) -> dict[str, int]:
 
 def run(model_key: str, seed: int, recipe: Recipe, name: str, max_train: int | None = None) -> dict:
     import mlflow
-    import torch
     from transformers import (
         DataCollatorWithPadding,
         EarlyStoppingCallback,
@@ -152,7 +163,8 @@ def run(model_key: str, seed: int, recipe: Recipe, name: str, max_train: int | N
         num_train_epochs=recipe.epochs,
         warmup_steps=0.1,
         weight_decay=0.01,
-        bf16=torch.backends.mps.is_available() or torch.cuda.is_available(),
+        bf16=precision() == "bf16",
+        fp16=precision() == "fp16",
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=1,
