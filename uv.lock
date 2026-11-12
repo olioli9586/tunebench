@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -3706,6 +3706,7 @@ serve = [
 ]
 train = [
     { name = "accelerate" },
+    { name = "huggingface-hub" },
     { name = "mlflow" },
     { name = "peft" },
     { name = "torch" },
@@ -3740,6 +3741,7 @@ serve = [
 ]
 train = [
     { name = "accelerate", specifier = ">=1.10" },
+    { name = "huggingface-hub", specifier = ">=2" },
     { name = "mlflow", specifier = ">=3" },
     { name = "peft", specifier = ">=0.17" },
     { name = "torch", specifier = ">=2.9" },

@@ -12,7 +12,7 @@ dependencies = ["numpy>=2"]
 dev = ["pytest>=8", "ruff>=0.14", "httpx>=0.28"]
 analysis = ["pandas>=2.2", "pyarrow>=18", "scikit-learn>=1.6", "matplotlib>=3.9"]
 claude = ["anthropic>=2.6"]
-train = ["torch>=2.9", "transformers>=5", "peft>=0.17", "accelerate>=1.10", "mlflow>=3"]
+train = ["torch>=2.9", "transformers>=5", "peft>=0.17", "accelerate>=1.10", "mlflow>=3", "huggingface-hub>=2"]
 export = ["onnx>=1.18", "onnxscript>=0.5"]
 serve = ["fastapi>=0.115", "uvicorn>=0.32", "onnxruntime>=1.22", "tokenizers>=0.21"]
 
@@ -34,3 +34,4 @@ testpaths = ["tests"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/tunebench/serve.py" = ["E501"]  # the demo page's inline CSS
+"scripts/publish.py" = ["E501"]  # the model card template
