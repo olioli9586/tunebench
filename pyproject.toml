@@ -1,0 +1,36 @@
+[project]
+name = "tunebench"
+version = "0.1.0"
+description = "Does a fine-tuned small model beat Claude on a narrow task? Banking77, four ways."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = ["numpy>=2"]
+
+# Each group is one job, so the serving image and CI install only what they use.
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.14", "httpx>=0.28"]
+analysis = ["pandas>=2.2", "pyarrow>=18", "scikit-learn>=1.6", "matplotlib>=3.9"]
+claude = ["anthropic>=2.6"]
+train = ["torch>=2.9", "transformers>=5", "peft>=0.17", "accelerate>=1.10", "mlflow>=3"]
+export = ["onnx>=1.18", "onnxscript>=0.5"]
+serve = ["fastapi>=0.115", "uvicorn>=0.32", "onnxruntime>=1.22", "tokenizers>=0.21"]
+
+[tool.uv]
+default-groups = ["dev", "analysis", "claude", "train", "export", "serve"]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/tunebench/serve.py" = ["E501"]  # the demo page's inline CSS
