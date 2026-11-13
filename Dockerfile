@@ -2,7 +2,7 @@
 #
 # Mount a directory written by tunebench.export at /model:
 #   docker build -t tunebench .
-#   docker run -p 8000:8000 -v "$PWD/artifacts/onnx/modernbert-seed1:/model:ro" tunebench
+#   docker run -p 8000:8000 -v "$PWD/artifacts/onnx/modernbert-seed2:/model:ro" tunebench
 # or bake the published model in (the Hugging Face Space does this):
 #   docker build --build-arg MODEL_REPO=<user>/<model repo> -t tunebench .
 FROM python:3.13-slim AS build

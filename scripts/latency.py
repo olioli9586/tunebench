@@ -1,18 +1,21 @@
 """CPU latency and throughput of the exported model, float32 vs int8.
 
-    python scripts/latency.py artifacts/onnx/modernbert-seed1
+    python scripts/latency.py artifacts/onnx/modernbert-seed2
 
 Two views, both on test-set messages:
 - In process (ONNX Runtime alone): one message at a time, with 1 thread,
   2 threads (a small cloud box or a free Hugging Face Space) and every core.
-- Over HTTP (the FastAPI server under uvicorn, THREADS=2): 500 sequential
-  requests for p50/p95, then 8 concurrent clients for requests per second.
+- Over HTTP (the FastAPI server under uvicorn): 500 sequential requests for
+  p50/p95 with THREADS=2; then throughput on about two cores' worth of work,
+  THREADS=1 with 2 clients sending at once (each request runs on one thread),
+  which is what the self-hosting cost estimate in RESULTS.md divides by.
 
 Writes results/serving/latency-<name>.json.
 """
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import platform
@@ -32,7 +35,6 @@ from tunebench.serve import Classifier
 WARMUP = 20
 SINGLE = 500
 CONCURRENT_REQUESTS = 1000
-CLIENTS = 8
 
 
 def in_process(model_dir: Path, file: str, texts: list[str], threads: int | None) -> dict:
@@ -53,7 +55,7 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-async def concurrent(url: str, texts: list[str]) -> float:
+async def concurrent(url: str, texts: list[str], clients: int) -> float:
     queue = list(texts)
 
     async def client(http: httpx.AsyncClient) -> None:
@@ -62,14 +64,16 @@ async def concurrent(url: str, texts: list[str]) -> float:
 
     async with httpx.AsyncClient(timeout=30) as http:
         started = time.perf_counter()
-        await asyncio.gather(*(client(http) for _ in range(CLIENTS)))
+        await asyncio.gather(*(client(http) for _ in range(clients)))
         return len(texts) / (time.perf_counter() - started)
 
 
-def over_http(model_dir: Path, file: str, texts: list[str]) -> dict:
+@contextlib.contextmanager
+def server(model_dir: Path, file: str, threads: int):
+    """The FastAPI server in a subprocess, ready and warmed up; yields its base URL."""
     port = free_port()
-    env = os.environ | {"MODEL_DIR": str(model_dir), "MODEL_FILE": file, "THREADS": "2"}
-    server = subprocess.Popen(
+    env = os.environ | {"MODEL_DIR": str(model_dir), "MODEL_FILE": file, "THREADS": str(threads)}
+    process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "tunebench.serve:app", "--port", str(port), "--log-level", "warning"],
         env=env,
     )
@@ -81,19 +85,25 @@ def over_http(model_dir: Path, file: str, texts: list[str]) -> dict:
                     break
             except httpx.TransportError:
                 time.sleep(0.2)
-        times = []
         with httpx.Client() as http:
-            for text in texts[:WARMUP]:
+            for text in [f"warm up {i}" for i in range(WARMUP)]:
                 http.post(f"{base}/predict", json={"text": text})
-            for text in texts[:SINGLE]:
-                started = time.perf_counter()
-                http.post(f"{base}/predict", json={"text": text}).raise_for_status()
-                times.append((time.perf_counter() - started) * 1000)
-        rps = asyncio.run(concurrent(f"{base}/predict", texts[:CONCURRENT_REQUESTS]))
-        return {**percentiles(times), f"requests_per_second_{CLIENTS}_clients": round(rps)}
+        yield base
     finally:
-        server.terminate()
-        server.wait()
+        process.terminate()
+        process.wait()
+
+
+def over_http(model_dir: Path, file: str, texts: list[str]) -> dict:
+    with server(model_dir, file, threads=2) as base, httpx.Client() as http:
+        times = []
+        for text in texts[:SINGLE]:
+            started = time.perf_counter()
+            http.post(f"{base}/predict", json={"text": text}).raise_for_status()
+            times.append((time.perf_counter() - started) * 1000)
+    with server(model_dir, file, threads=1) as base:
+        rps = asyncio.run(concurrent(f"{base}/predict", texts[:CONCURRENT_REQUESTS], clients=2))
+    return {**percentiles(times), "requests_per_second_2_cores": round(rps)}
 
 
 def main() -> None:
@@ -111,7 +121,7 @@ def main() -> None:
         report[label] = {
             "size_mb": round((a.model_dir / file).stat().st_size / 1e6, 1),
             "in_process": {f"threads_{t or 'all'}": in_process(a.model_dir, file, texts, t) for t in (1, 2, None)},
-            "http_threads_2": over_http(a.model_dir, file, texts),
+            "http": over_http(a.model_dir, file, texts),
         }
         print(label, json.dumps(report[label], indent=1))
     out = ROOT / "results" / "serving" / f"latency-{a.model_dir.name}.json"

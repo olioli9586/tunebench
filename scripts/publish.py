@@ -33,7 +33,7 @@ def model_card(run: dict, onnx: dict, latency: dict | None, model_repo: str) -> 
     int8, fp32 = onnx["int8"], onnx["fp32"]
     speed = ""
     if latency:
-        http = latency["int8"]["http_threads_2"]
+        http = latency["int8"]["http"]
         speed = (
             f"\nServed as int8 ONNX behind FastAPI with 2 CPU threads ({latency['machine']}): p50 "
             f"{http['p50']:.1f} ms, p95 {http['p95']:.1f} ms per request.\n"

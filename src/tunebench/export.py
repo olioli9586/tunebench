@@ -1,6 +1,6 @@
 """Export a fine-tuned classifier to ONNX, then quantize its weights to int8.
 
-    python -m tunebench.export artifacts/modernbert-seed1
+    python -m tunebench.export artifacts/modernbert-seed2
 
 writes artifacts/onnx/<name>/: model.onnx (float32), model.int8.onnx (dynamic
 int8 quantization: weights stored as 8-bit integers, activations quantized on

@@ -1,6 +1,6 @@
 """The fine-tuned classifier behind an HTTP API, with ONNX Runtime on the CPU.
 
-    MODEL_DIR=artifacts/onnx/modernbert-seed1 uvicorn tunebench.serve:app
+    MODEL_DIR=artifacts/onnx/modernbert-seed2 uvicorn tunebench.serve:app
 
 MODEL_DIR holds what tunebench.export writes (tokenizer.json, labels.json and
 the .onnx files); MODEL_FILE picks the file, model.int8.onnx by default.
