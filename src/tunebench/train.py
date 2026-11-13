@@ -59,7 +59,7 @@ RECIPES = {
         learning_rate=2e-4,
         epochs=5,
         batch_size=16,
-        patience=1,
+        patience=2,
     ),
 }
 MAX_LENGTH = 128  # the longest Banking77 message is well under this; batches pad to their longest
