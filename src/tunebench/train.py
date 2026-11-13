@@ -26,7 +26,7 @@ import numpy as np
 
 from .data import ROOT, Split, load
 from .metrics import scores
-from .results import record
+from .results import RESULTS_DIR, record
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,13 @@ def build(recipe: Recipe, names: list[str]):
             target_modules="all-linear",
         )
         model = get_peft_model(model, config)
+        if precision() == "fp16":
+            from peft import cast_mixed_precision_params
+
+            # float16 training needs float32 trainable weights (the gradient scaler
+            # refuses float16 ones); the new head would otherwise stay in float16.
+            # On bfloat16 the head stays in bfloat16, as in the reported runs.
+            cast_mixed_precision_params(model, torch.float16)
     return tokenizer, model
 
 
@@ -136,6 +143,8 @@ def parameter_counts(model) -> dict[str, int]:
 
 
 def run(model_key: str, seed: int, recipe: Recipe, name: str, max_train: int | None = None) -> dict:
+    import contextlib
+
     import mlflow
     from transformers import (
         DataCollatorWithPadding,
@@ -174,7 +183,7 @@ def run(model_key: str, seed: int, recipe: Recipe, name: str, max_train: int | N
         logging_steps=50,
         seed=seed,
         data_seed=seed,
-        report_to=["mlflow"],
+        report_to=["none"] if max_train else ["mlflow"],
         run_name=name,
     )
     trainer = Trainer(
@@ -187,20 +196,24 @@ def run(model_key: str, seed: int, recipe: Recipe, name: str, max_train: int | N
         callbacks=[EarlyStoppingCallback(early_stopping_patience=recipe.patience)],
     )
 
-    os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{ROOT / 'mlflow.db'}")
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-    mlflow.set_experiment("tunebench")
+    tracked = not max_train  # smoke runs leave no trace in MLflow or artifacts/
+    if tracked:
+        os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{ROOT / 'mlflow.db'}")
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+        mlflow.set_experiment("tunebench")
     # A run opened here stays open after Trainer finishes, so the test scores join it.
-    with mlflow.start_run(run_name=name):
-        mlflow.log_params({"model": model_key, "checkpoint": recipe.checkpoint, "seed": seed})
+    with mlflow.start_run(run_name=name) if tracked else contextlib.nullcontext():
+        if tracked:
+            mlflow.log_params({"model": model_key, "checkpoint": recipe.checkpoint, "seed": seed})
         started = time.perf_counter()
         trainer.train()
         train_seconds = time.perf_counter() - started
         val = trainer.evaluate()
         test = trainer.predict(Encoded(data.test, tokenizer))
         predicted = np.argmax(test.predictions, axis=-1).tolist()
+        best_step = trainer.state.best_global_step
         best_epoch = next(
-            (e["epoch"] for e in trainer.state.log_history if e.get("eval_macro_f1") == val["eval_macro_f1"]),
+            (e["epoch"] for e in trainer.state.log_history if "eval_macro_f1" in e and e["step"] == best_step),
             None,
         )
         row = record(
@@ -222,12 +235,17 @@ def run(model_key: str, seed: int, recipe: Recipe, name: str, max_train: int | N
             device=str(trainer.args.device),
             **parameter_counts(model),
         )
-        mlflow.log_metrics(
-            {"test_accuracy": row["accuracy"], "test_macro_f1": row["macro_f1"], "train_seconds": train_seconds}
-        )
+        if tracked:
+            mlflow.log_metrics(
+                {"test_accuracy": row["accuracy"], "test_macro_f1": row["macro_f1"], "train_seconds": train_seconds}
+            )
 
+    if not tracked:
+        return row
     if recipe.lora:
-        model = model.merge_and_unload()
+        # Merge in float32: adding the small LoRA update to bfloat16 weights
+        # would round much of it away, and the saved model would not be the one scored.
+        model = model.float().merge_and_unload()
     out = ARTIFACTS / name
     model.save_pretrained(out)
     tokenizer.save_pretrained(out)
@@ -242,14 +260,19 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--max-train", type=int, help="train on the first N examples (smoke runs)")
-    parser.add_argument("--name", help="results/<name>.json; default <model>-seed<seed>")
+    parser.add_argument(
+        "--name", help="results/<name>.json; default <model>-seed<seed> (LoRA: <model>-r<rank>-seed<seed>)"
+    )
+    parser.add_argument("--overwrite", action="store_true", help="replace an existing results file of the same name")
     a = parser.parse_args()
     recipe = RECIPES[a.model]
     changes = {
         k: v for k, v in {"rank": a.rank, "learning_rate": a.learning_rate, "epochs": a.epochs}.items() if v is not None
     }
     recipe = replace(recipe, **changes)
-    name = a.name or f"{a.model}-seed{a.seed}"
+    name = a.name or (f"{a.model}-r{recipe.rank}-seed{a.seed}" if recipe.lora else f"{a.model}-seed{a.seed}")
+    if not a.max_train and (RESULTS_DIR / f"{name}.json").exists() and not a.overwrite:
+        parser.error(f"results/{name}.json exists; pass --overwrite to replace it, or --name.")
     row = run(a.model, a.seed, recipe, name, a.max_train)
     print(
         f"{name}: test accuracy {row['accuracy']:.4f}, macro-F1 {row['macro_f1']:.4f}, "
