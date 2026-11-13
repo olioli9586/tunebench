@@ -1,0 +1,19 @@
+{
+ "model": "modernbert-seed2",
+ "split": "validation",
+ "n": 1001,
+ "per_tensor": {
+  "size_mb": 150.0,
+  "accuracy": 0.9340659340659341,
+  "macro_f1": 0.9319020974447606
+ },
+ "per_channel": {
+  "size_mb": 150.6,
+  "accuracy": 0.936063936063936,
+  "macro_f1": 0.9348620137782244
+ },
+ "fp32": {
+  "accuracy": 0.9400599400599401,
+  "macro_f1": 0.9381106190282845
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "model": "modernbert-seed2",
+ "machine": "Darwin arm64",
+ "threads": 2,
+ "params": 149664077,
+ "latency_ms": {
+  "p50": 13.232312572654337,
+  "p95": 18.436755955917754
+ }
+}

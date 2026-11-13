@@ -1,0 +1,10 @@
+{
+ "model": "qwen3-lora-r16-seed2",
+ "machine": "Darwin arm64",
+ "threads": 2,
+ "params": 596128768,
+ "latency_ms": {
+  "p50": 47.63512499630451,
+  "p95": 55.601365992333726
+ }
+}
