@@ -6,13 +6,14 @@
 Zero-shot: the 77 intent names and the message. Few-shot adds the k training
 messages most similar to this one (TF-IDF cosine), with their intents. The
 answer is a structured output whose only field is an enum of the 77 names, so
-it is always a valid intent or nothing (a refusal or a cut-off answer counts
-as wrong).
+it is always a valid intent or nothing: a refusal, or an answer cut off before
+its JSON closes, counts as wrong (and its tokens still count as spent).
 
 Spending is capped: the run stops starting requests once the cost so far,
 plus what the requests in flight could add, would pass --max-usd. Every
 answer is appended to data/claude/<name>.jsonl as it arrives, so a rerun
-picks up where a stopped one left off without paying twice.
+picks up where a stopped one left off without paying twice; the cap covers
+everything in that log, earlier attempts included.
 """
 
 import argparse
@@ -20,21 +21,21 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
-from pydantic import create_model
 
 from .data import DATA_DIR, Banking77, load
 from .metrics import percentiles
 from .results import record
 
 MODEL = "claude-haiku-5-5"
-# USD per million tokens (platform.claude.com pricing, checked 2026-11-08 for DealScout).
+# USD per million tokens (platform.claude.com pricing, checked 2026-11-08). The API
+# reports tokens, not dollars, so the cost of a run is its tokens at these prices.
 INPUT_USD, OUTPUT_USD = 0.10, 0.50
 MAX_TOKENS = 4096  # thinking counts toward it
 CONCURRENCY = 8
-WORST_CASE_USD = (2_000 * INPUT_USD + MAX_TOKENS * OUTPUT_USD) / 1e6  # one request's ceiling
+# One request's ceiling: 10-shot prompts run to about 3,000 tokens, so 4,000 bounds them.
+WORST_CASE_USD = (4_000 * INPUT_USD + MAX_TOKENS * OUTPUT_USD) / 1e6
 
 SYSTEM = """You classify messages sent to a bank's customer support into exactly one of 77 intents.
 
@@ -42,6 +43,31 @@ Intents:
 {intents}
 
 Pick the single intent that best matches what the customer wants. Answer with the intent name only."""
+
+
+def answer_format(names: list[str]) -> dict:
+    """The structured-output schema: one field, an enum of the intent names. (The same
+    schema the SDK's messages.parse builds from a pydantic model with a Literal field.)"""
+    return {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "title": "Answer",
+            "properties": {"intent": {"enum": list(names), "title": "Intent"}},
+            "additionalProperties": False,
+            "required": ["intent"],
+        },
+    }
+
+
+def read_answer(response, names: list[str]) -> int:
+    """The intent's index, or -1 for a refusal or an answer that doesn't parse."""
+    text = "".join(b.text for b in response.content if b.type == "text")
+    try:
+        intent = json.loads(text)["intent"]
+    except (ValueError, KeyError, TypeError):
+        return -1
+    return names.index(intent) if intent in names else -1
 
 
 def cost(usage) -> float:
@@ -76,7 +102,7 @@ async def classify_all(
     client, data: Banking77, shots: int, effort: str, max_usd: float, log: Path, limit: int | None
 ) -> list[dict]:
     names = data.names
-    answer = create_model("Answer", intent=(Literal[tuple(names)], ...))
+    output_format = answer_format(names)
     system = SYSTEM.format(intents="\n".join(names))
     neighbors = Neighbors(data) if shots else None
     texts = data.test.texts[:limit] if limit else data.test.texts
@@ -102,21 +128,19 @@ async def classify_all(
             examples = neighbors(texts[i], shots) if neighbors else []
             started = time.perf_counter()
             try:
-                response = await client.messages.parse(
+                response = await client.messages.create(
                     model=MODEL,
                     max_tokens=MAX_TOKENS,
                     system=system,
                     messages=[{"role": "user", "content": prompt(texts[i], examples, names)}],
-                    output_config={"effort": effort},
-                    output_format=answer,
+                    output_config={"effort": effort, "format": output_format},
                 )
             finally:
                 async with lock:
                     in_flight -= 1
-            parsed = response.parsed_output
             row = {
                 "i": i,
-                "predicted": names.index(parsed.intent) if parsed else -1,
+                "predicted": read_answer(response, names),
                 "stop_reason": response.stop_reason,
                 "ms": round((time.perf_counter() - started) * 1000),
                 "input_tokens": response.usage.input_tokens,
@@ -129,7 +153,15 @@ async def classify_all(
                 with log.open("a") as f:
                     f.write(json.dumps(row) + "\n")
 
-    await asyncio.gather(*(one(i) for i in range(len(texts)) if i not in done))
+    # Let every request in flight finish (and be logged) before reporting a failure:
+    # an answer that was paid for is never thrown away.
+    outcomes = await asyncio.gather(*(one(i) for i in range(len(texts)) if i not in done), return_exceptions=True)
+    failures = [o for o in outcomes if isinstance(o, BaseException)]
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} requests failed (first: {failures[0]!r}); {len(done)}/{len(texts)} answers are kept "
+            f"in {log}, and a rerun asks only about the rest."
+        ) from failures[0]
     if len(done) < len(texts):
         raise SystemExit(
             f"Stopped at the spend cap: {len(done)}/{len(texts)} answered, ${spent:.3f} spent. "
@@ -144,7 +176,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--shots", type=int, default=0, help="similar training examples per message")
     parser.add_argument("--effort", choices=["low", "medium", "high"], default="high")
-    parser.add_argument("--max-usd", type=float, default=1.5, help="hard cap for this run")
+    parser.add_argument(
+        "--max-usd",
+        type=float,
+        default=1.5,
+        help="hard cap on this run's total, answers kept from earlier attempts included",
+    )
     parser.add_argument("--limit", type=int, help="first N test messages only (trial runs)")
     a = parser.parse_args()
     name = f"claude-haiku-5-5-{a.shots}shot-{a.effort}" + (f"-first{a.limit}" if a.limit else "")
