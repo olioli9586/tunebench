@@ -2,9 +2,9 @@
 
     python scripts/quant_variants.py artifacts/onnx/modernbert-seed2
 
-Quantizes the exported float32 model two ways, per-tensor scales (the default,
-what tunebench.export ships) and per-channel scales, and scores each against
-float32 on the validation split. Writes results/serving/quant-variants-<name>.json.
+Quantizes the exported float32 model two ways, per-tensor scales (ONNX Runtime's
+default) and per-channel scales (what tunebench.export ships, chosen with this
+script), and scores each against float32 on the validation split. Writes results/serving/quant-variants-<name>.json.
 """
 
 import argparse

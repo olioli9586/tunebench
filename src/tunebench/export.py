@@ -51,7 +51,9 @@ def export(model_dir: Path, out_dir: Path) -> tuple[Path, Path]:
     prepared = out_dir / "model.prepared.onnx"
     quant_pre_process(str(fp32), str(prepared))
     int8 = out_dir / "model.int8.onnx"
-    quantize_dynamic(str(prepared), str(int8), weight_type=QuantType.QInt8)
+    # Per-channel scales (one per output row of each weight matrix): on the served model they kept
+    # 0.2 points more validation accuracy than one scale per matrix (scripts/quant_variants.py).
+    quantize_dynamic(str(prepared), str(int8), weight_type=QuantType.QInt8, per_channel=True)
     prepared.unlink()
 
     backend = tokenizer.backend_tokenizer
