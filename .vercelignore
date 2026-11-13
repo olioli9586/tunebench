@@ -1,0 +1,8 @@
+# Upload only what Dockerfile.vercel copies (no data, models, run logs or .env files).
+/*
+!/Dockerfile.vercel
+!/pyproject.toml
+!/uv.lock
+!/README.md
+!/src
+__pycache__/

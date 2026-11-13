@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.7"
+      # No PyTorch here: the export tests skip themselves, and serving is tested
+      # with the tiny int8 model checked in under tests/fixtures/tiny.
+      - run: uv sync --locked --no-default-groups --group dev --group analysis --group claude --group serve
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t tunebench .
+      - name: Serve the fixture model and classify one message
+        run: |
+          docker run -d --name tb -p 8000:8000 -v "$PWD/tests/fixtures/tiny:/model:ro" tunebench
+          for i in $(seq 30); do curl -fs localhost:8000/health && break; sleep 1; done
+          curl -fs -X POST localhost:8000/predict -H 'content-type: application/json' \
+            -d '{"text": "my card has not arrived"}' | tee /dev/stderr | grep -q '"intent"'
+          docker image ls tunebench --format 'image size: {{.Size}}'
+      - if: failure()
+        run: docker logs tb
