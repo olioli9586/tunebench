@@ -1,22 +1,17 @@
-"""Publishes the fine-tuned model to the Hugging Face Hub and deploys the demo Space.
+"""Publishes the fine-tuned model to the Hugging Face Hub.
 
     .venv/bin/hf auth login                      # once, with a token that can write
     python scripts/publish.py modernbert-seed2   # the run exported with tunebench.export
 
-Creates or updates two public repos under the logged-in account:
-- <user>/modernbert-base-banking77: the model in transformers format
-  (safetensors), onnx/ with the float32 and int8 files, and a model card whose
-  numbers come from results/.
-- <user>/banking77-intents, a Docker Space: this repo's Dockerfile and serving
-  code, built with MODEL_REPO set so the image bakes in the int8 model and
-  serves it on the Space's free CPU.
+Creates or updates the public repo <user>/modernbert-base-banking77: the model
+in transformers format (safetensors), onnx/ with the float32 and int8 files,
+and a model card whose numbers come from results/. The live demo runs on
+Vercel instead of a Hugging Face Space (Docker Spaces need a paid plan); its
+image downloads the int8 model from this repo (Dockerfile.vercel).
 """
 
 import argparse
 import json
-import shutil
-import tempfile
-from pathlib import Path
 
 from huggingface_hub import HfApi
 
@@ -24,8 +19,8 @@ from tunebench.data import ROOT
 from tunebench.train import RECIPES
 
 MODEL_NAME = "modernbert-base-banking77"
-SPACE_NAME = "banking77-intents"
 GITHUB = "https://github.com/olioli9586/tunebench"
+DEMO = "https://tunebench-henna.vercel.app"
 
 
 def model_card(run: dict, onnx: dict, latency: dict | None, model_repo: str) -> str:
@@ -59,14 +54,24 @@ Classifies a message to a bank's customer support into one of 77 intents
 [TuneBench]({GITHUB}), which compares it with a TF-IDF baseline, a LoRA-tuned
 Qwen3-0.6B and Claude Haiku 5.5 on the same test set.
 
+**Try it:** [{DEMO}]({DEMO}) (the int8 file below behind FastAPI on a
+Vercel CPU; the first request after a few idle minutes takes a few seconds).
+
 ## Results on the Banking77 test split (3,080 messages, 40 per intent)
 
 | File | Size | Accuracy | Macro-F1 |
 |---|---|---|---|
 | PyTorch (safetensors in this repo) | {fp32["size_mb"]:.0f} MB | {100 * run["accuracy"]:.1f}% | {run["macro_f1"]:.4f} |
 | `onnx/model.onnx` (float32) | {fp32["size_mb"]:.0f} MB | {100 * fp32["accuracy"]:.1f}% | {fp32["macro_f1"]:.4f} |
-| `onnx/model.int8.onnx` (dynamic int8) | {int8["size_mb"]:.0f} MB | {100 * int8["accuracy"]:.1f}% | {int8["macro_f1"]:.4f} |
+| `onnx/model.int8.onnx` (dynamic int8, per-channel, 7-bit weights) | {int8["size_mb"]:.0f} MB | {100 * int8["accuracy"]:.1f}% | {int8["macro_f1"]:.4f} |
 {speed}
+int8 accuracy depends on the CPU. The numbers above are on an Apple M5 Pro,
+where ONNX Runtime runs the int8 matrix multiplies in an ARM-specific fused
+kernel. On x86 the int8 file scores about 91% (91.2% on an Intel Xeon, 91.3%
+on the live demo); float32 gives the same answers everywhere. The weights use 7
+of their 8 bits on purpose: with full 8-bit weights, ONNX Runtime on x86 CPUs
+without VNNI overflows 16-bit sums, and the first deployment scored 77%.
+
 This is seed {run["seed"]} of three; the repo reports the mean and spread over all three.
 
 ## Training
@@ -101,23 +106,6 @@ Dataset: Banking77 (Casanueva et al., 2020), CC BY 4.0.
 """
 
 
-SPACE_CARD = """---
-title: Banking77 intent classifier
-emoji: 🏦
-colorFrom: blue
-colorTo: gray
-sdk: docker
-app_port: 8000
-license: mit
-short_description: ModernBERT fine-tuned on Banking77, int8 ONNX on CPU
----
-
-A demo of [TuneBench]({github}): [{model_repo}](https://huggingface.co/{model_repo}),
-served as int8 ONNX behind FastAPI on this Space's free CPU. `POST /predict`
-with `{{"text": "..."}}` returns the intent and the top 3 with confidences.
-"""
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run", help="e.g. modernbert-seed2 (artifacts/<run> and artifacts/onnx/<run> must exist)")
@@ -130,7 +118,6 @@ def main() -> None:
     api = HfApi()
     user = api.whoami()["name"]
     model_repo = f"{user}/{MODEL_NAME}"
-    space_repo = f"{user}/{SPACE_NAME}"
 
     api.create_repo(model_repo, exist_ok=True)
     api.upload_folder(repo_id=model_repo, folder_path=ROOT / "artifacts" / a.run, commit_message=f"Model ({a.run})")
@@ -147,20 +134,7 @@ def main() -> None:
         commit_message="Model card",
     )
 
-    with tempfile.TemporaryDirectory() as tmp:
-        space = Path(tmp)
-        dockerfile = (ROOT / "Dockerfile").read_text()
-        assert 'ARG MODEL_REPO=""' in dockerfile
-        (space / "Dockerfile").write_text(dockerfile.replace('ARG MODEL_REPO=""', f'ARG MODEL_REPO="{model_repo}"'))
-        for name in ("pyproject.toml", "uv.lock", "LICENSE"):
-            shutil.copy(ROOT / name, space / name)
-        shutil.copytree(ROOT / "src", space / "src", ignore=shutil.ignore_patterns("__pycache__"))
-        (space / "README.md").write_text(SPACE_CARD.format(github=GITHUB, model_repo=model_repo))
-        api.create_repo(space_repo, repo_type="space", space_sdk="docker", exist_ok=True)
-        api.upload_folder(repo_id=space_repo, repo_type="space", folder_path=space, commit_message="Deploy")
-
     print(f"Model: https://huggingface.co/{model_repo}")
-    print(f"Space: https://huggingface.co/spaces/{space_repo} (builds for a few minutes)")
 
 
 if __name__ == "__main__":

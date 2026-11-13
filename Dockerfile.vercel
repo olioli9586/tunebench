@@ -1,0 +1,25 @@
+# The live demo on Vercel's Container runtime: the same image as Dockerfile,
+# with the published int8 model baked in. Hugging Face Docker Spaces need a
+# paid plan; a Vercel container scales to zero when idle and is free on Hobby.
+#   vercel deploy --prod     (.vercelignore uploads only what this file copies)
+FROM python:3.13-slim AS build
+RUN pip install --no-cache-dir uv==0.13.7 huggingface_hub==2.4.0
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-default-groups --group serve --no-install-project
+COPY src ./src
+RUN uv sync --locked --no-default-groups --group serve --no-editable
+# Pinned to a commit of the model repo, so a rebuild serves the same file (and a new commit rebuilds).
+RUN python -c "from huggingface_hub import snapshot_download; \
+snapshot_download('Oliilo123/modernbert-base-banking77', revision='3bf79a0d8b0df01a943b142ad4cb189a0cca12ad', \
+allow_patterns=['onnx/model.int8.onnx', 'onnx/tokenizer.json', 'onnx/labels.json'], local_dir='/tmp/m')" \
+    && mkdir /model && mv /tmp/m/onnx/* /model/
+
+FROM python:3.13-slim
+COPY --from=build /app/.venv /app/.venv
+COPY --from=build /model /model
+# A Hobby function instance has one vCPU.
+ENV PATH=/app/.venv/bin:$PATH MODEL_DIR=/model MODEL_FILE=model.int8.onnx THREADS=1
+# Vercel sends traffic to port 80 unless the project sets PORT.
+CMD ["sh", "-c", "exec uvicorn tunebench.serve:app --host 0.0.0.0 --port ${PORT:-80}"]
