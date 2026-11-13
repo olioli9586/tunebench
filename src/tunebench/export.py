@@ -48,6 +48,7 @@ def export(model_dir: Path, out_dir: Path) -> tuple[Path, Path]:
         dynamo=True,
         external_data=False,
     )
+    drop_node_metadata(fp32)
     prepared = out_dir / "model.prepared.onnx"
     quant_pre_process(str(fp32), str(prepared))
     int8 = out_dir / "model.int8.onnx"
@@ -62,6 +63,18 @@ def export(model_dir: Path, out_dir: Path) -> tuple[Path, Path]:
     labels = [model.config.id2label[i] for i in range(model.config.num_labels)]
     (out_dir / "labels.json").write_text(json.dumps(labels, indent=1) + "\n")
     return fp32, int8
+
+
+def drop_node_metadata(path: Path) -> None:
+    """The dynamo exporter records a Python stack trace on every node, full of this
+    machine's file paths. They don't affect inference; drop them before publishing."""
+    import onnx
+
+    model = onnx.load(str(path))
+    for graph_nodes in [model.graph.node, *(f.node for f in model.functions)]:
+        for node in graph_nodes:
+            del node.metadata_props[:]
+    onnx.save(model, str(path))
 
 
 def evaluate(model_file: Path, texts: list[str], batch_size: int = 64) -> tuple[list[int], float]:

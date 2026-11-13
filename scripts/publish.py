@@ -108,7 +108,7 @@ colorFrom: blue
 colorTo: gray
 sdk: docker
 app_port: 8000
-license: apache-2.0
+license: mit
 short_description: ModernBERT fine-tuned on Banking77, int8 ONNX on CPU
 ---
 

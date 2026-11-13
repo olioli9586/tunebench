@@ -38,7 +38,7 @@ paired significance tests, the export, latency and the error analysis.
   fine-tuning buys about two points on this dataset, and the paired test says
   those two points are real (p < 1e-7).
 - **int8 makes serving 1.8x faster for 0.1 points of accuracy.** The file
-  shrinks from 601 MB to 151 MB, and two CPU cores handle 1.6x the requests
+  shrinks from 599 MB to 151 MB, and two CPU cores handle 1.6x the requests
   (269 against 173 per second over HTTP).
 - **Many remaining errors are the dataset's.** See below.
 

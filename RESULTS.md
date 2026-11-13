@@ -54,7 +54,7 @@ The rank is chosen on validation macro-F1; test accuracy is shown for reference 
 
 | File | Size | Test accuracy | Macro-F1 |
 |---|---|---|---|
-| model.onnx | 601 MB | 93.8% | 0.9375 |
+| model.onnx | 599 MB | 93.8% | 0.9375 |
 | model.int8.onnx | 151 MB | 93.6% | 0.9363 |
 
 int8 and float32 give the same answer on 3,061 of 3,080 test messages.
@@ -78,7 +78,7 @@ int8 variants, chosen on validation (`scripts/quant_variants.py`):
 | p50 over HTTP (FastAPI, 2 threads) | 8.1 ms | 4.5 ms | 1.8x |
 | p95 over HTTP (FastAPI, 2 threads) | 15.0 ms | 9.9 ms | 1.5x |
 | Requests/s over HTTP, 2 cores (1 thread x 2 clients) | 173 req/s | 269 req/s | 1.6x |
-| Model file | 601 MB | 151 MB | 4.0x smaller |
+| Model file | 599 MB | 151 MB | 4.0x smaller |
 
 ## Error analysis: the intents each model mixes up most (seed 0)
 
