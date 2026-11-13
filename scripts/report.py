@@ -153,6 +153,13 @@ def main() -> None:
         "running at the 2-core throughput measured over HTTP below; a cloud vCPU is slower than an M5 core, so",
         "read it as an order of magnitude. Claude's cost is the token usage the API reported, at list prices.",
     ]
+    cpus = [read(p) for p in sorted(SERVING.glob("cpu-*.json"))]
+    x86 = [c for c in cpus if c["machine"] == "x86_64"]
+    if served and x86:
+        out += [
+            f"The int8 row's accuracy is on the Apple CPU. The same file scores {pct(x86[0]['int8_7bit']['accuracy'])} "
+            "on an x86 server (see the export section): int8 accuracy depends on the CPU's kernels; float32's doesn't.",
+        ]
 
     if encoder_seeds or lora:
         out += ["", "## Every training run", ""]
@@ -198,6 +205,24 @@ def main() -> None:
             only_b = sum(y and not x for x, y in zip(ca, cb, strict=True))
             out.append(f"| {label(a)} | {label(b)} | {only_a} | {only_b} | {mcnemar(ca, cb):.2g} |")
 
+    claude = seed0("claude-haiku-5-5-10shot-high")
+    if claude:
+        # One seed can land on either side of p = 0.05, so every fine-tuned run is tested against Claude.
+        contenders = [
+            (r["name"], r) for r in sorted(encoder_seeds + by_family.get(chosen_lora, []), key=lambda r: r["name"])
+        ]
+        if onnx:
+            contenders.append((f"{onnx['model']}, int8 ONNX (served)", onnx["int8"]))
+        out += ["", f"Every fine-tuned run against {label('claude-haiku-5-5-10shot-high')}:", ""]
+        out += ["| Run | Test accuracy | Run right, Claude wrong | Claude right, run wrong | p-value |"]
+        out += ["|---|---|---|---|---|"]
+        cb = right(claude)
+        for name, run in contenders:
+            ca = right(run)
+            only_a = sum(x and not y for x, y in zip(ca, cb, strict=True))
+            only_b = sum(y and not x for x, y in zip(ca, cb, strict=True))
+            out.append(f"| {name} | {pct(run['accuracy'])} | {only_a} | {only_b} | {mcnemar(ca, cb):.2g} |")
+
     if onnx:
         agree = sum(x == y for x, y in zip(onnx["fp32"]["predictions"], onnx["int8"]["predictions"], strict=True))
         out += ["", f"## Export: {onnx['model']} to ONNX, then int8", ""]
@@ -209,11 +234,53 @@ def main() -> None:
         variants = read(SERVING / f"quant-variants-{onnx['model']}.json")
         if variants:
             out += ["", "int8 variants, chosen on validation (`scripts/quant_variants.py`):", ""]
-            out += ["| Variant | Size | Val accuracy | Val macro-F1 |", "|---|---|---|---|"]
-            out.append(f"| float32 | — | {pct(variants['fp32']['accuracy'])} | {variants['fp32']['macro_f1']:.4f} |")
-            for key, title in (("per_tensor", "int8, per-tensor"), ("per_channel", "int8, per-channel (shipped)")):
+            out += [
+                "| Variant | Size | Val accuracy | Val macro-F1 | p50, 1 thread | Can overflow on x86 without VNNI |",
+                "|---|---|---|---|---|---|",
+            ]
+            fp32 = variants["fp32"]
+            out.append(
+                f"| float32 | — | {pct(fp32['accuracy'])} | {fp32['macro_f1']:.4f} | "
+                f"{fp32['p50_ms_1_thread']:.1f} ms | no |"
+            )
+            for key, title in (
+                ("per_tensor", "int8, per-tensor"),
+                ("per_channel", "int8, per-channel"),
+                ("per_channel_reduce_range", "int8, per-channel, 7-bit weights (shipped)"),
+                ("per_tensor_u8u8", "int8, per-tensor, unsigned weights"),
+                ("per_channel_u8u8", "int8, per-channel, unsigned weights"),
+            ):
                 v = variants[key]
-                out.append(f"| {title} | {v['size_mb']:.0f} MB | {pct(v['accuracy'])} | {v['macro_f1']:.4f} |")
+                overflow = "yes" if v["clamps_on_x86_without_vnni"] else "no"
+                out.append(
+                    f"| {title} | {v['size_mb']:.0f} MB | {pct(v['accuracy'])} | {v['macro_f1']:.4f} | "
+                    f"{v['p50_ms_1_thread']:.1f} ms | {overflow} |"
+                )
+
+        live, first_live = read(SERVING / "live-demo.json"), read(SERVING / "live-demo-first-int8.json")
+        if cpus:
+            out += ["", "### The same files on other CPUs (test accuracy)", ""]
+            out += ["`scripts/cpu_check.py` scores the published files on the machine it runs on (the x86 run was in a"]
+            out += [
+                "Vercel Sandbox); `scripts/check_live.py` scores the live demo (a Vercel Function, x86).",
+                "",
+            ]
+            columns = [f"{c['cpu']} ({', '.join(c['features'])})" for c in cpus]
+            out += ["| File | " + " | ".join(columns) + " | Live demo |", "|---|" + "---|" * (len(cpus) + 1)]
+            rows_ = (
+                ("float32", "float32", None),
+                ("int8_8bit", "int8, 8-bit weights (first export)", first_live),
+                ("int8_7bit", "int8, 7-bit weights (shipped)", live),
+                ("int8_7bit_no_fusions", "int8, 7-bit weights, graph fusions off", None),
+                ("int8_unsigned", "int8, unsigned weights", None),
+            )
+            for key, title, demo in rows_:
+                cells = [pct(c[key]["accuracy"]) for c in cpus]
+                out.append(f"| {title} | " + " | ".join(cells) + f" | {pct(demo['accuracy']) if demo else '—'} |")
+            if len(cpus) == 2:
+                same = sum(a == b for a, b in zip(*(c["float32"]["predictions"] for c in cpus), strict=True))
+                out += ["", f"float32 gives the same answer on both CPUs for {same:,} of 3,080 messages."]
+                out += ["int8 does not: the integer kernels, and how each CPU fuses them, differ by platform."]
 
     if latency:
         out += ["", f"## CPU latency and throughput ({latency['machine']})", ""]

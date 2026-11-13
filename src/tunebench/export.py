@@ -52,9 +52,11 @@ def export(model_dir: Path, out_dir: Path) -> tuple[Path, Path]:
     prepared = out_dir / "model.prepared.onnx"
     quant_pre_process(str(fp32), str(prepared))
     int8 = out_dir / "model.int8.onnx"
-    # Per-channel scales (one per output row of each weight matrix): on the served model they kept
-    # 0.2 points more validation accuracy than one scale per matrix (scripts/quant_variants.py).
-    quantize_dynamic(str(prepared), str(int8), weight_type=QuantType.QInt8, per_channel=True)
+    # Per-channel scales (one per output row of each weight matrix) and 7-bit weights. Full 8-bit
+    # weights scored 93.6% on the Apple CPU but 77% on an x86 server: without VNNI, ONNX Runtime
+    # adds pairs of 8-bit products into 16 bits and clamps the overflow. 7-bit weights can't
+    # overflow and matched float32 on validation (scripts/quant_variants.py).
+    quantize_dynamic(str(prepared), str(int8), weight_type=QuantType.QInt8, per_channel=True, reduce_range=True)
     prepared.unlink()
 
     backend = tokenizer.backend_tokenizer

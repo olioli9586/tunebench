@@ -99,9 +99,47 @@ Findings worth remembering:
   getting declined" labeled declined_transfer) and most of the rest sit
   between two near-duplicate intents.
 
+Published, same day:
+- Model on Hugging Face: Oliilo123/modernbert-base-banking77 (safetensors,
+  onnx/ with float32 and int8, model card built from results/). The float32
+  ONNX file carried a Python stack trace on every node, full of this
+  machine's file paths; the export now drops them (identical logits).
+- Hugging Face Docker Spaces now need a paid plan, so the demo runs on
+  Vercel's container runtime instead (Dockerfile.vercel, free on Hobby):
+  https://tunebench-henna.vercel.app. .vercelignore uploads only what the
+  image copies. It runs as root there, because Vercel routes to port 80.
+- The live demo scored 77.4% on the test set, against 93.6% for the same
+  int8 file on this Mac (595 different answers, most collapsing to
+  pending_top_up). The same server code locally gave the batch answers (199
+  of 200), so it was the platform. First cause: on x86 CPUs without VNNI,
+  ONNX Runtime's signed-weight int8 kernel adds pairs of 8-bit products into
+  16 bits and clamps what overflows. 7-bit weights (reduce_range) can't
+  overflow and matched float32 on validation here (94.0% vs 93.6% for full
+  8-bit; unsigned weights 91%, and 2.5x slower). The export now uses 7-bit
+  per-channel weights; test on this Mac: 93.3% (float32 93.8%).
+- Redeployed: 91.3%, still 151 answers off this Mac. A Vercel Sandbox (Intel
+  Xeon 2.9 GHz, AVX-512 VNNI, 2 vCPUs, ~16 CPU-minutes) ran the published
+  files (scripts/cpu_check.py): float32 identical to the Mac on all 3,080;
+  every int8 variant 90.9-91.2%, the old 8-bit file included (VNNI doesn't
+  clamp). With ONNX Runtime's graph fusions off, this Mac drops to 90.3%
+  too: on ARM the fused int8 matrix multiply runs in its own kernel, which
+  keeps about 3 points more. So plain int8 on this model is about a 91%
+  model, the Mac's 93.3% is ARM-specific, and int8 answers differ by ~5%
+  between any two CPU kernels (Mac, Xeon, the demo's CPU) while accuracy
+  stays near 91%. The demo keeps int8, the file the latency and cost
+  numbers describe; serving float32 there is the alternative (93.8%).
+- Served int8 vs Claude 10-shot: p = 0.02 even at the Mac's 93.3%, and two
+  of three ModernBERT seeds aren't separable from Claude (p = 0.11, 0.24)
+  while the third and every Qwen seed are (p <= 0.03). The README's
+  "statistically indistinguishable" rested on seed 0 alone; it now says
+  "within about a point" and RESULTS.md tests every run against Claude.
+  Lesson: measure a quantized model on the hardware that serves it, and
+  test every seed, not one.
+
 Next:
-- Hugging Face: model repo and the demo Space need the owner's account
-  (`.venv/bin/hf auth login`, then `python scripts/publish.py modernbert-seed2`).
-  Then check the Space's int8 answers on x86 against the local ones.
 - EvalBoard "custom HTTP endpoint" model type (olioli9586/evalboard#4), so
   the served model and Claude run through the same eval.
+- int8 that holds on x86: keep the few most sensitive matrix multiplies in
+  float32 (nodes_to_exclude), or static quantization with calibration data,
+  scored with scripts/cpu_check.py in a sandbox. Check Graviton, which the
+  cost estimate assumes.

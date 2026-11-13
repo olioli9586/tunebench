@@ -1,0 +1,1 @@
+{"url": "https://tunebench-henna.vercel.app", "file": "model.int8.onnx, 8-bit per-channel weights (model repo commit 4910c6344ea6)", "accuracy": 0.7737, "same_as_local_int8": 2485, "note": "First deployment, scored with an earlier version of scripts/check_live.py; predictions were not kept."}

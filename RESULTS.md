@@ -8,7 +8,7 @@ seeds (same data split, different initialization and data order).
 |---|---|---|---|---|---|---|
 | TF-IDF + logistic regression | 1 | 91.1% | 0.911 | 0.5 ms | ≈ $0 | — |
 | ModernBERT-base, full fine-tune | 3 | 93.4 ± 0.5% | 0.934 ± 0.005 | 13 ms (PyTorch) | — | 149.7M |
-| ModernBERT-base, int8 ONNX served (seed 2) | 1 | 93.6% | 0.936 | 3.8 ms (ONNX) | $0.000075 | — |
+| ModernBERT-base, int8 ONNX served (seed 2) | 1 | 93.3% | 0.933 | 3.9 ms (ONNX) | $0.000075 | — |
 | Qwen3-0.6B + LoRA (rank 16) | 3 | 93.3 ± 0.1% | 0.933 ± 0.001 | 48 ms (PyTorch) | — | 10.2M |
 | Claude Haiku 5.5, zero-shot (effort high) | 1 | 81.9% | 0.813 | 1.02 s (API) | $0.247 | — |
 | Claude Haiku 5.5, 10-shot (effort high) | 1 | 94.3% | 0.943 | 0.89 s (API) | $0.258 | — |
@@ -17,6 +17,7 @@ Latency is on the CPU with 2 threads (Apple M5 Pro) for the local models and the
 Claude (8 requests in flight). Self-hosted cost assumes AWS c7g.large (2 vCPU) at $0.0725/hour
 running at the 2-core throughput measured over HTTP below; a cloud vCPU is slower than an M5 core, so
 read it as an order of magnitude. Claude's cost is the token usage the API reported, at list prices.
+The int8 row's accuracy is on the Apple CPU. The same file scores 91.2% on an x86 server (see the export section): int8 accuracy depends on the CPU's kernels; float32's doesn't.
 
 ## Every training run
 
@@ -50,34 +51,65 @@ The rank is chosen on validation macro-F1; test accuracy is shown for reference 
 | ModernBERT-base, full fine-tune | Claude Haiku 5.5, 10-shot (effort high) | 66 | 87 | 0.11 |
 | Claude Haiku 5.5, 10-shot (effort high) | Claude Haiku 5.5, zero-shot (effort high) | 411 | 31 | 8e-86 |
 
+Every fine-tuned run against Claude Haiku 5.5, 10-shot (effort high):
+
+| Run | Test accuracy | Run right, Claude wrong | Claude right, run wrong | p-value |
+|---|---|---|---|---|
+| modernbert-seed0 | 93.6% | 66 | 87 | 0.11 |
+| modernbert-seed1 | 92.8% | 65 | 109 | 0.0011 |
+| modernbert-seed2 | 93.7% | 73 | 89 | 0.24 |
+| qwen3-lora-r16-seed0 | 93.3% | 67 | 95 | 0.034 |
+| qwen3-lora-r16-seed1 | 93.3% | 65 | 95 | 0.022 |
+| qwen3-lora-r16-seed2 | 93.2% | 70 | 103 | 0.015 |
+| modernbert-seed2, int8 ONNX (served) | 93.3% | 65 | 95 | 0.022 |
+
 ## Export: modernbert-seed2 to ONNX, then int8
 
 | File | Size | Test accuracy | Macro-F1 |
 |---|---|---|---|
 | model.onnx | 599 MB | 93.8% | 0.9375 |
-| model.int8.onnx | 151 MB | 93.6% | 0.9363 |
+| model.int8.onnx | 151 MB | 93.3% | 0.9327 |
 
-int8 and float32 give the same answer on 3,061 of 3,080 test messages.
+int8 and float32 give the same answer on 3,052 of 3,080 test messages.
 
 int8 variants, chosen on validation (`scripts/quant_variants.py`):
 
-| Variant | Size | Val accuracy | Val macro-F1 |
+| Variant | Size | Val accuracy | Val macro-F1 | p50, 1 thread | Can overflow on x86 without VNNI |
+|---|---|---|---|---|---|
+| float32 | — | 94.0% | 0.9381 | 8.0 ms | no |
+| int8, per-tensor | 150 MB | 93.4% | 0.9319 | 4.7 ms | yes |
+| int8, per-channel | 151 MB | 93.6% | 0.9349 | 4.6 ms | yes |
+| int8, per-channel, 7-bit weights (shipped) | 151 MB | 94.0% | 0.9374 | 4.9 ms | no |
+| int8, per-tensor, unsigned weights | 150 MB | 90.8% | 0.9051 | 11.4 ms | no |
+| int8, per-channel, unsigned weights | 151 MB | 91.1% | 0.9112 | 12.2 ms | no |
+
+### The same files on other CPUs (test accuracy)
+
+`scripts/cpu_check.py` scores the published files on the machine it runs on (the x86 run was in a
+Vercel Sandbox); `scripts/check_live.py` scores the live demo (a Vercel Function, x86).
+
+| File | Apple M5 Pro (FEAT_DotProd, FEAT_I8MM, FEAT_SME2) | Intel(R) Xeon(R) Processor @ 2.90GHz (avx2, avx512f, avx512_vnni) | Live demo |
 |---|---|---|---|
-| float32 | — | 94.0% | 0.9381 |
-| int8, per-tensor | 150 MB | 93.4% | 0.9319 |
-| int8, per-channel (shipped) | 151 MB | 93.6% | 0.9349 |
+| float32 | 93.8% | 93.8% | — |
+| int8, 8-bit weights (first export) | 93.6% | 91.2% | 77.4% |
+| int8, 7-bit weights (shipped) | 93.3% | 91.2% | 91.3% |
+| int8, 7-bit weights, graph fusions off | 90.3% | 91.2% | — |
+| int8, unsigned weights | 91.5% | 90.9% | — |
+
+float32 gives the same answer on both CPUs for 3,080 of 3,080 messages.
+int8 does not: the integer kernels, and how each CPU fuses them, differ by platform.
 
 ## CPU latency and throughput (Darwin arm64, 15 cores)
 
 | Measure | float32 | int8 | int8 speed-up |
 |---|---|---|---|
-| p50, in process, 1 thread | 6.8 ms | 4.5 ms | 1.5x |
-| p50, in process, 2 threads | 7.0 ms | 3.8 ms | 1.8x |
-| p50, in process, all cores | 6.1 ms | 3.8 ms | 1.6x |
-| p95, in process, 2 threads | 13.9 ms | 9.1 ms | 1.5x |
-| p50 over HTTP (FastAPI, 2 threads) | 8.1 ms | 4.5 ms | 1.8x |
-| p95 over HTTP (FastAPI, 2 threads) | 15.0 ms | 9.9 ms | 1.5x |
-| Requests/s over HTTP, 2 cores (1 thread x 2 clients) | 173 req/s | 269 req/s | 1.6x |
+| p50, in process, 1 thread | 7.3 ms | 4.5 ms | 1.6x |
+| p50, in process, 2 threads | 7.2 ms | 3.9 ms | 1.8x |
+| p50, in process, all cores | 6.7 ms | 4.1 ms | 1.7x |
+| p95, in process, 2 threads | 14.2 ms | 9.4 ms | 1.5x |
+| p50 over HTTP (FastAPI, 2 threads) | 7.9 ms | 4.8 ms | 1.6x |
+| p95 over HTTP (FastAPI, 2 threads) | 14.9 ms | 10.1 ms | 1.5x |
+| Requests/s over HTTP, 2 cores (1 thread x 2 clients) | 168 req/s | 267 req/s | 1.6x |
 | Model file | 599 MB | 151 MB | 4.0x smaller |
 
 ## Error analysis: the intents each model mixes up most (seed 0)

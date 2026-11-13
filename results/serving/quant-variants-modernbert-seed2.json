@@ -4,16 +4,42 @@
  "n": 1001,
  "per_tensor": {
   "size_mb": 150.0,
+  "clamps_on_x86_without_vnni": true,
   "accuracy": 0.9340659340659341,
-  "macro_f1": 0.9319020974447606
+  "macro_f1": 0.9319020974447606,
+  "p50_ms_1_thread": 4.67
  },
  "per_channel": {
   "size_mb": 150.6,
+  "clamps_on_x86_without_vnni": true,
   "accuracy": 0.936063936063936,
-  "macro_f1": 0.9348620137782244
+  "macro_f1": 0.9348620137782244,
+  "p50_ms_1_thread": 4.64
+ },
+ "per_channel_reduce_range": {
+  "size_mb": 150.6,
+  "clamps_on_x86_without_vnni": false,
+  "accuracy": 0.9400599400599401,
+  "macro_f1": 0.9374249375919029,
+  "p50_ms_1_thread": 4.93
+ },
+ "per_tensor_u8u8": {
+  "size_mb": 150.0,
+  "clamps_on_x86_without_vnni": false,
+  "accuracy": 0.9080919080919081,
+  "macro_f1": 0.905120350630658,
+  "p50_ms_1_thread": 11.39
+ },
+ "per_channel_u8u8": {
+  "size_mb": 150.7,
+  "clamps_on_x86_without_vnni": false,
+  "accuracy": 0.9110889110889111,
+  "macro_f1": 0.911218796709337,
+  "p50_ms_1_thread": 12.18
  },
  "fp32": {
   "accuracy": 0.9400599400599401,
-  "macro_f1": 0.9381106190282845
+  "macro_f1": 0.9381106190282845,
+  "p50_ms_1_thread": 8.03
  }
 }

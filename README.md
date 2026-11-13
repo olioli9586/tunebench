@@ -4,13 +4,18 @@
 to the same job, classifying a bank customer's message into one of 77 intents
 (Banking77), all scored on the same held-out test set of 3,080 messages.
 
+**Try it:** [tunebench-henna.vercel.app](https://tunebench-henna.vercel.app) (the
+fine-tuned model as int8 ONNX behind FastAPI on a CPU; the first request after
+a few idle minutes takes a few seconds). **Model:**
+[Oliilo123/modernbert-base-banking77](https://huggingface.co/Oliilo123/modernbert-base-banking77).
+
 ![Test accuracy, cost and latency per approach](docs/accuracy.png)
 
 | Approach | Test accuracy | Macro-F1 | p50 latency, 1 message | $ per 1K requests |
 |---|---|---|---|---|
 | TF-IDF + logistic regression | 91.1% | 0.911 | 0.5 ms | ≈ $0 |
 | ModernBERT-base, full fine-tune (3 seeds) | 93.4 ± 0.5% | 0.934 ± 0.005 | 13 ms (PyTorch, CPU) | — |
-| ↳ the best seed served as int8 ONNX | 93.6% | 0.936 | 3.8 ms (CPU) | $0.000075 (self-hosted) |
+| ↳ the best seed served as int8 ONNX | 93.3% (Apple CPU), 91.3% (x86) | 0.933 | 3.9 ms (CPU) | $0.000075 (self-hosted) |
 | Qwen3-0.6B + LoRA, classification head (3 seeds) | 93.3 ± 0.1% | 0.933 ± 0.001 | 48 ms (PyTorch, CPU) | — |
 | Claude Haiku 5.5, zero-shot | 81.9% | 0.813 | 1.02 s (API) | $0.247 |
 | Claude Haiku 5.5, 10 retrieved examples | 94.3% | 0.943 | 0.89 s (API) | $0.258 |
@@ -21,13 +26,15 @@ paired significance tests, the export, latency and the error analysis.
 
 ## What I found
 
-- **A 150M-parameter model fine-tuned in 10 minutes is statistically
-  indistinguishable from Claude with retrieved examples.** Claude is about a
-  point ahead, but on the same 3,080 messages a paired McNemar test gives
-  p = 0.11. Served as int8 on a CPU, the small model answers in about 4 ms
-  for under $0.0001 per 1,000 requests: over 3,000x cheaper and about 200x
-  faster than the API call. The LoRA-tuned Qwen3-0.6B (4x the parameters)
-  lands in the same place (93.3%, p = 0.61 against ModernBERT).
+- **A 150M-parameter model fine-tuned in 10 minutes comes within about a
+  point of Claude with retrieved examples, for over 3,000x less.** Served as
+  int8 on a CPU, it answers in about 4 ms for under $0.0001 per 1,000
+  requests, about 200x faster than the API call. Claude's lead is small but
+  mostly real: on the same 3,080 messages a paired McNemar test can't
+  separate them for two of the three ModernBERT seeds (p = 0.11 and 0.24),
+  but can for the third, for every Qwen seed and for the int8 file
+  (p ≤ 0.03, even on the Apple CPU). The LoRA-tuned Qwen3-0.6B (4x the parameters) lands level with
+  ModernBERT (93.3%, p = 0.61).
 - **Claude without examples is the weakest approach, below a TF-IDF
   baseline.** The 77 intent names alone don't say where Banking77 draws its
   lines (`card_arrival` vs `card_delivery_estimate`, `top_up_failed` vs
@@ -37,9 +44,26 @@ paired significance tests, the export, latency and the error analysis.
 - **The baseline is strong.** TF-IDF with character n-grams reaches 91.1%;
   fine-tuning buys about two points on this dataset, and the paired test says
   those two points are real (p < 1e-7).
-- **int8 makes serving 1.8x faster for 0.1 points of accuracy.** The file
-  shrinks from 599 MB to 151 MB, and two CPU cores handle 1.6x the requests
-  (269 against 173 per second over HTTP).
+- **int8 makes serving 1.8x faster, and what it costs in accuracy depends
+  on the CPU.** The file shrinks from 599 MB to 151 MB and two CPU cores
+  handle 1.6x the requests (267 against 168 per second over HTTP). On the
+  Apple CPU it costs half a point (93.8% to 93.3%); on x86 it costs 2.5
+  (91.2% on an Intel Xeon, 91.3% on the live demo). float32 gives
+  identical answers on both.
+- **The first int8 file was right on my laptop and wrong on the server.** It
+  scored 93.6% on the Apple CPU and **77.4% on the deployed demo**, on the
+  same test set. Two things were going on, found by running the published
+  files on an x86 Xeon in a Vercel Sandbox (`scripts/cpu_check.py`):
+  - With signed 8-bit weights, ONNX Runtime on x86 CPUs without VNNI adds
+    pairs of products into 16 bits and clamps what overflows. 7-bit weights
+    can't overflow: the demo went from 77.4% to 91.3%, the same as a Xeon
+    with VNNI.
+  - The remaining gap is the Apple CPU being better, not x86 being broken.
+    On ARM, ONNX Runtime fuses the int8 matrix multiply into its own kernel;
+    with fusions turned off, the same file scores 90.3% on the Mac too.
+    Plain int8 on this model is a ~91% model.
+
+  The lesson: measure a quantized model on the hardware that serves it.
 - **Many remaining errors are the dataset's.** See below.
 
 ## Error analysis
@@ -117,9 +141,11 @@ best ModernBERT seed (by validation) ─► ONNX float32 ─► int8 ─► Fast
   `tokenizers`, numpy and FastAPI; the export test checks that ONNX logits match
   PyTorch's to 1e-4 and that the standalone tokenizer gives the same ids.
 - **Dynamic int8 quantization** (weights in 8 bits, activations quantized at
-  run time) needs no calibration data. Per-channel scales kept 0.2 points
-  more validation accuracy than one scale per matrix on the served model, so
-  the export uses them (`scripts/quant_variants.py`).
+  run time) needs no calibration data. The export uses one scale per output
+  row (per-channel) and **7-bit weights**, chosen among five variants
+  (`scripts/quant_variants.py`): it matched float32 on validation on the
+  Apple CPU (94.0%), and it is the variant that can't overflow on x86
+  servers without VNNI.
 - **Every run's test predictions are committed**, so every number in
   RESULTS.md, including the significance tests, can be recomputed from the
   repo without running a model.
@@ -147,6 +173,10 @@ MLflow keeps every training run (`uv run mlflow ui --backend-store-uri sqlite://
 
 ## Serve it
 
+The live demo is this image on Vercel's container runtime
+(`Dockerfile.vercel`, which downloads the int8 model from Hugging Face;
+`vercel deploy --prod`). Hugging Face Docker Spaces need a paid plan. Locally:
+
 ```bash
 docker build -t tunebench .
 docker run -p 8000:8000 -v "$PWD/artifacts/onnx/modernbert-seed2:/model:ro" tunebench
@@ -163,7 +193,9 @@ curl -s localhost:8000/predict -H 'content-type: application/json' \
 - Latency was measured on an idle Apple M5 Pro CPU. The cost per 1K
   self-hosted requests assumes a 2-vCPU AWS c7g.large ($0.0725/hour) running
   at the 2-core throughput measured here; a cloud vCPU is slower, so read it
-  as an order of magnitude.
+  as an order of magnitude. int8 accuracy was measured on the Apple CPU, an
+  Intel Xeon and the live demo, not on the Graviton CPU that price assumes;
+  since it depends on the CPU's kernels, check it there before relying on it.
 - Claude results are one run each (the API is not seeded). Their cost is the
   token usage the API reported, at list prices.
 - On the Qwen LoRA runs the new classification head trains in bfloat16
